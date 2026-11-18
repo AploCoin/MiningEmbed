@@ -500,7 +500,37 @@ static void testInvalidProof() {
     assert(test.fixture.sends == 0);
 }
 
+static void testApplicationCycle() {
+    Test test;
+    MiningSession session;
+    assert(parseMiningSession(test.session.owner.c_str(), test.session.signer.c_str(),
+                              "1337", "1000000000000000000", test.session.expiry, session));
+    assert(session.chainId == 1337 && session.gaploBudget == uint256_t(UINT64_C(1000000000000000000)));
+    for (const char* invalid : {"01", "0x10", "-1", "0", "10a",
+                                "115792089237316195423570985008687907853269984665640564039457584007913129639936"}) {
+        assert(!parseMiningSession(session.owner.c_str(), session.signer.c_str(), invalid,
+                                   "1000", session.expiry, session));
+    }
+    assert(!parseMiningSession(session.owner.c_str(), session.owner.c_str(), "1337",
+                               "1000", session.expiry, session));
+    assert(!parseMiningSession(session.owner.c_str() + 2, session.signer.c_str(), "1337",
+                               "1000", session.expiry, session));
+    assert(!parseMiningSession(session.owner.c_str(), session.signer.c_str(), "1337",
+                               "115792089237316195423570985008687907853269984665640564039457584007913129639935",
+                               session.expiry, session));
+
+    MiningEmbed miner(test.rpc, test.key, test.session);
+    Submission submission;
+    assert(miner.step(1, submission) == Status::Ok && submission.state == SubmissionState::Broadcast);
+    assert(miner.step(1, submission) == Status::Ok && submission.state == SubmissionState::Pending);
+    assert(test.fixture.sends == 1 && miner.unresolved());
+    test.fixture.receipt = 1;
+    assert(miner.step(1, submission) == Status::Ok && submission.state == SubmissionState::Confirmed);
+    assert(test.fixture.sends == 1 && !miner.unresolved());
+}
+
 int main() {
+    testApplicationCycle();
     testFullChainDomain();
     testStakeBoundary();
     testReceiptLifecycle();

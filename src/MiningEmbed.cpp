@@ -44,7 +44,46 @@ static bool address(const string& value) {
     return any != 0;
 }
 
+bool positiveDecimal(const char* text, uint256_t& out) {
+    if (!text || *text < '1' || *text > '9') {
+        return false;
+    }
+    const uint256_t max = ~uint256_t(0);
+    const uint256_t ten(10);
+    uint256_t value(0);
+    size_t length = 0;
+    for (; *text; ++text) {
+        if (++length > 78 || *text < '0' || *text > '9') {
+            return false;
+        }
+        const uint256_t digit(static_cast<unsigned>(*text - '0'));
+        if (value > (max - digit) / ten) {
+            return false;
+        }
+        value = value * ten + digit;
+    }
+    out = value;
+    return true;
+}
 } // namespace
+
+bool parseMiningSession(const char* owner, const char* signer, const char* chainId,
+                        const char* gaploBudget, uint64_t expiry, MiningSession& out) {
+    if (!owner || !signer || !expiry) {
+        return false;
+    }
+    MiningSession parsed;
+    parsed.owner = lower(owner);
+    parsed.signer = lower(signer);
+    if (!address(parsed.owner) || !address(parsed.signer) || parsed.owner == parsed.signer ||
+        !positiveDecimal(chainId, parsed.chainId) || !positiveDecimal(gaploBudget, parsed.gaploBudget) ||
+        parsed.gaploBudget == ~uint256_t(0)) {
+        return false;
+    }
+    parsed.expiry = expiry;
+    out = parsed;
+    return true;
+}
 
 const char* statusName(Status status) {
     switch (status) {
@@ -89,6 +128,21 @@ MiningEmbed::MiningEmbed(aplo::SessionKeys& rpc, aplo::SessionKey& key,
     : rpc_(rpc), key_(key), session_(session) {
     session_.owner = lower(session_.owner);
     session_.signer = lower(session_.signer);
+}
+
+Status MiningEmbed::step(uint32_t maxAttempts, Submission& out) {
+    if (unresolved()) {
+        return receipt(out);
+    }
+    out = Submission();
+    MinerParams params;
+    const Status fetched = readParams(params);
+    if (fetched != Status::Ok) {
+        return fetched;
+    }
+    Candidate candidate;
+    const Status found = findCandidate(params, maxAttempts, candidate);
+    return found == Status::Ok ? submit(candidate, out) : found;
 }
 
 bool MiningEmbed::configurationValid() const {

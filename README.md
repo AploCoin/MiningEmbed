@@ -10,17 +10,11 @@ Clone MiningEmbed and [AploEmbed](https://github.com/AploCoin/AploEmbed) from Gi
 
 For Arduino, put the two library directories in your sketchbook `libraries/` directory and include `<MiningEmbed.h>`. Supported architectures: ESP8266 and ESP32, including ESP32-C3.
 
-For PlatformIO, keep two local Git checkouts with AploEmbed's session API. The example reads their absolute locations from environment variables, so the checkouts can live anywhere:
+From the MiningEmbed checkout, build the example with PlatformIO. It uses this checkout and installs AploEmbed from its pinned GitHub commit.
 
-```sh
-# Start in your MiningEmbed checkout; adjust ../AploEmbed if needed.
-export MININGEMBED_PATH="$PWD"
-export APLOEMBED_PATH="$(cd ../AploEmbed && pwd)"
-python3 tests/run.py --aploembed "$APLOEMBED_PATH"
+~~~sh
 pio run -d examples/SessionMining -e esp12e -e esp32dev -e esp32-c3-devkitm-1
-```
-
-Use a current AploEmbed checkout with native session keys and HTTPS trust profiles. Each FirmwareEmbed board project records its exact compatible versions in its dependency lock. Both local libraries must report version 0.1.0 or later. The checked-in PlatformIO configuration selects `symlink://${sysenv.APLOEMBED_PATH}` and `symlink://${sysenv.MININGEMBED_PATH}` explicitly; it does not download an old AploEmbed release. Platform versions are pinned to ESP8266 4.2.1 / Arduino 3.1.2 and ESP32 6.12.0 / Arduino 2.0.17. Arduino 3.x on ESP32 is not covered.
+~~~
 
 For Arduino IDE, install both libraries in your sketchbook `libraries/` directory and open `examples/SessionMining/SessionMining.ino`. Its implementation is in the sketch's `src/main.cpp`, which Arduino compiles automatically. Configure networking/TLS in `setup()` and replace `loadConfirmedSession()` with your provisioning source. That function is the explicit handoff for the session key and the public authorization copied from a confirmed registration. The default zero secret prevents sending; no real key belongs in the source tree. A synthetic test session must also be registered on the selected test network before use.
 
@@ -34,15 +28,8 @@ using namespace miningembed;
 // Configure the network and TLS first. Provision and confirm authorization outside this library.
 aplo::SessionKeys rpc(web3);                // borrows application's Web3
 MiningEmbed miner(rpc, sessionKey, session); // borrows RPC and RAM-only SessionKey; copies public config
-MinerParams params;
-Candidate candidate;
 Submission share;
-if (miner.readParams(params) == Status::Ok &&
-    miner.findCandidate(params, 2000, candidate) == Status::Ok) {
-    Status sent = miner.submit(candidate, share); // always revalidates internally
-}
-// While miner.unresolved(), poll once per application-selected interval:
-Status observed = miner.receipt(share);
+Status status = miner.step(2000, share); // Call once per application-selected interval.
 ```
 
 `MiningSession` contains `owner`, `signer`, `chainId` (uint256), `gaploBudget` (uint256, original approved budget in base units), and inclusive `expiry` (uint64). Copy these public values from a **confirmed owner-approved registration** with exactly GAplo `0x1234`, selector `mine(bytes32)` (`0x2fdc505e`), zero APLO and a finite positive GAPLO allowance. Provision only the session secret. Do not change or clear the borrowed key concurrently with a call. Clearing or importing a different key between calls invalidates the configured identity; create a new miner for a newly approved session after reconciling any outstanding transaction. `rpc` and `sessionKey` must outlive the miner. Do not concurrently access a signer from another task or device.
@@ -54,6 +41,8 @@ For numeric configuration, use integer arithmetic or explicit `0x` strings. Aplo
 The proof packs `signer[20] || nonce[32] || target[32] || prevHash[32] || totalMined[32]`. All words use big-endian encoding and the entire 256-bit mining count is retained. `miner_params` uses the signer argument and owner `from`; stake and GAPLO balance use the owner. A zero initial target is replaced by the contract's `DEFAULT_DIFFICULTY()`, as in WebMiner.
 
 Before signing, `submit` checks the live chain domain, registry owner/target/zero-APLO/budget/expiry, estimates gas as the session signer to check native selector permission, checks owner stake and funds, re-reads session state and pending signer nonce, then re-reads the challenge at an explicit block height and recomputes the proof. The gas limit is estimate + 10,000, capped at the original miner's 200,000 ceiling. It rejects estimates below 21,000 or above 190,000, zero gas price and fee arithmetic overflow. No nonce is narrowed to uint32.
+
+Applications can parse the confirmed session's decimal chain ID and GAplo budget using parseMiningSession. The step method polls an unresolved share before starting another batch. The individual methods remain available for applications with their own scheduling.
 
 ## Submission states
 
@@ -73,7 +62,7 @@ The final recheck is a client-side guard: the chain can change after signing, so
 
 ```sh
 # From MiningEmbed, using the same dependency checkout as the board build:
-python3 tests/run.py --aploembed "$APLOEMBED_PATH"
+python3 tests/run.py --aploembed /path/to/AploEmbed
 ```
 
 Host tests use the dependency's actual uint256, SessionKeys and Trezor code under ASan/UBSan, an injected RPC fixture, and a host-only platform adapter. Production uses AploEmbed `Contract`/`Crypto` and Arduino yielding. They verify portable behavior; they do not establish live ESP heap, TLS performance or hash rate.
@@ -82,4 +71,4 @@ Derived portions retain the AploEmbed MIT license and original attribution. No s
 
 ## HTTPS trust
 
-SessionMining reuses the AploEmbed build-profile generator. Set `APLOEMBED_PATH`, `MININGEMBED_PATH` and `APLO_TRUST_PROFILE=/absolute/path/to/profile.json` before `pio run -d examples/SessionMining -e esp12e` (also esp32dev / esp32-c3-devkitm-1). Configure profile URLs/roots using AploEmbed `tools/trust/profile.py`; see its `docs/tls-trust.md` for local/public/custom commands, immutable PEM lifetimes, fallback CA boundaries and MFLN/IP SAN constraints. No TLS or root store is added to the portable MiningEmbed library. The example still requires application WiFi/time and confirmed-session provisioning before mining.
+Set the CA on Web3 or place a generated AploTrustProfile.h in the example's include directory. See [AploEmbed TLS trust](https://github.com/AploCoin/AploEmbed/blob/master/docs/tls-trust.md) for local, public and custom RPCs. The example also needs Wi-Fi, time synchronization and a confirmed mining session. Use FirmwareEmbed for complete board applications.

@@ -86,8 +86,8 @@ def test_facade(base, build):
     # The Web3 adapter is the board boundary; this fixture injects RPC instead.
     base_sources = sorted(
         path
-        for path in (base / "src").glob("Session*.cpp")
-        if path.name != "SessionKeysWeb3.cpp"
+        for path in (base / "src" / "session").glob("Session*.cpp")
+        if path.name not in ("SessionKeysWeb3.cpp", "SessionSerial.cpp")
     )
     base_sources += sorted((base / "src/internal").glob("*.cpp"))
     sources = [

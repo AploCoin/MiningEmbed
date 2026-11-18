@@ -3,6 +3,10 @@
 #include <Web3.h>
 #include <MiningEmbed.h>
 
+#if __has_include("AploTrustProfile.h")
+#include "AploTrustProfile.h"
+#endif
+
 using namespace miningembed;
 
 // Replace this provider with your application-controlled provisioning flow.
@@ -30,7 +34,7 @@ static bool loadConfirmedSession(aplo::SessionKey& key, MiningSession& session) 
 
 void setup() {
     Serial.begin(115200);
-    // Configure Wi-Fi and trusted TLS here before the loop creates Web3.
+    // Connect Wi-Fi and synchronize time before running the mining loop.
 }
 
 void loop() {
@@ -39,7 +43,11 @@ void loop() {
         return;
     }
     // ESP8266 needs network readiness before constructing TLS state.
-    static Web3 web3;
+#if __has_include("AploTrustProfile.h")
+    static Web3 web3(APLO_TRUST_PRIMARY_URL, APLO_TRUST_FALLBACK_URL);
+#else
+    static Web3 web3; // For manual CA setup, call setCertificate before using RPC.
+#endif
     static aplo::SessionKeys rpc(web3);
     static aplo::SessionKey key;
     static MiningSession authorization;
@@ -49,27 +57,18 @@ void loop() {
             delay(1000);
             return;
         }
+#if __has_include("AploTrustProfile.h")
+        web3.setCertificate(APLO_TRUST_PRIMARY_CA, APLO_TRUST_FALLBACK_CA);
+#endif
         provisioned = true;
     }
     static MiningEmbed miner(rpc, key, authorization);
     Submission submission;
-    Status status;
-    if (miner.unresolved()) {
-        status = miner.receipt(submission);
-        Serial.printf("receipt status=%u state=%u hash=%s\n", static_cast<unsigned>(status),
-                      static_cast<unsigned>(submission.state), submission.hash.c_str());
-    } else {
-        MinerParams params;
-        Candidate candidate;
-        status = miner.readParams(params);
-        if (status == Status::Ok) {
-            status = miner.findCandidate(params, 2000, candidate);
-        }
-        // submit() repeats authorization, funding, nonce and challenge checks.
-        if (status == Status::Ok) {
-            status = miner.submit(candidate, submission);
-        }
-        Serial.println(statusName(status));
+    const Status status = miner.step(2000, submission);
+    Serial.println(statusName(status));
+    if (!submission.hash.empty()) {
+        Serial.printf("state=%u hash=%s\n", static_cast<unsigned>(submission.state),
+                      submission.hash.c_str());
     }
     delay(1000); // The application owns cadence and unresolved-transaction recovery.
 }

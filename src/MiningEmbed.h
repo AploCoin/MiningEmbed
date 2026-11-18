@@ -37,12 +37,18 @@ struct MiningSession {
     uint256_t gaploBudget = 0;
     uint64_t expiry = 0;
 };
+// Parse owner-approved public metadata. Chain ID and GAPLO use decimal base units.
+bool parseMiningSession(const char* owner, const char* signer, const char* chainId,
+                        const char* gaploBudget, uint64_t expiry, MiningSession& out);
+
 class MiningEmbed {
 public:
     // Both borrowed references must outlive this object. No implicit owner key.
     MiningEmbed(aplo::SessionKeys& rpc, aplo::SessionKey& key, const MiningSession& session);
     MiningEmbed(const MiningEmbed&) = delete;
     MiningEmbed& operator=(const MiningEmbed&) = delete;
+    // Poll the outstanding share or run one bounded read/search/submit cycle.
+    Status step(uint32_t maxAttempts, Submission& out);
     Status readParams(MinerParams& out);
     Status findCandidate(const MinerParams& params, uint32_t maxAttempts, Candidate& out);
     Status revalidate(const Candidate& candidate);

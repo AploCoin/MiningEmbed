@@ -6,3 +6,6 @@ tests/.build/
 secrets.h
 
 __pycache__/
+examples/SessionMining/include/AploTrustProfile.h
+examples/SessionMining/include/AploTrustEndpoints.h
+examples/SessionMining/include/AploTrustProfile.json

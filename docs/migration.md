@@ -1,0 +1,12 @@
+# Migrating from AploMine
+
+The old `Web3::AploGetMinerParams` and `Web3::AploMine` helpers and full `Aplo Mining` example belonged to AploEmbed `1d16a91f5709cc73ed5b96fd792f5cf33858458f`. Mining is now a separate dependency. This is a source migration, not an automatic compatibility alias.
+
+1. Add AploEmbed's new session-key version and MiningEmbed. Replace `<Web3.h>` mining-helper calls with `<MiningEmbed.h>` and a `miningembed::MiningEmbed` object.
+2. On an owner-controlled device, authorize a session at native registry `0x0000000000000000000000000000000000001237`. Restrict its target to GAplo `0x0000000000000000000000000000000000001234`, selectors to only `mine(bytes32)`, APLO allowance to zero, GAPLO to an explicit finite budget and expiry to a short inclusive block height (native maximum lifetime 1,000 blocks). Use AploEmbed's acceptance proof and owner-signing flow. Registration/revocation is not an implicit mining operation.
+3. Transfer only the session secret and public confirmed authorization to the miner. Remove the owner private key and old `AploMine(contract,nonce,ownerKey,ownerAddress)` calls from firmware. Keep the original owner's APLO stake and GAPLO funding; no session-address stake is required.
+4. Read params using `readParams`, then call `findCandidate` in batches of at most 2,000. Do not convert target, previous hash or total-mined count to floats or uint32. The session signer is the proof identity; the owner is the funding/reward identity.
+5. Submit with `submit`, keep its hash and state, and poll with `receipt`. Count only `Confirmed`; distinguish reverted, pending and uncertain outcomes. Do not restart/recreate a miner to bypass an unresolved transaction without reconciling it first.
+6. Keep Wi-Fi reconnects, ESP8266 DHCP handling, TLS trust, cooperative application scheduling, cadence, display, provisioning and durable recovery in firmware. The library yields inside its bounded hash loop and does not configure Wi-Fi.
+
+The application must stop submission if authorization expires, is revoked, has insufficient budget, or RPC state cannot be checked. Renewal requires fresh owner authorization; there is no fallback to an owner secret. A receipt success is not finality across reorganizations; additional confirmation depth is an application policy.

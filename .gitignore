@@ -1,0 +1,8 @@
+.pio/
+**/.pio/
+.DS_Store
+tests/.build/
+*.log
+secrets.h
+
+__pycache__/

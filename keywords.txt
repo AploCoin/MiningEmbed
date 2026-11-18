@@ -1,0 +1,10 @@
+MiningEmbed	KEYWORD1
+MiningSession	KEYWORD1
+MinerParams	KEYWORD1
+Candidate	KEYWORD1
+Submission	KEYWORD1
+readParams	KEYWORD2
+findCandidate	KEYWORD2
+revalidate	KEYWORD2
+submit	KEYWORD2
+receipt	KEYWORD2

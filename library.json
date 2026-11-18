@@ -1,0 +1,16 @@
+{
+  "name": "MiningEmbed",
+  "version": "0.1.0",
+  "description": "Bounded session-key mining for AploCoin embedded applications.",
+  "keywords": ["AploCoin", "mining", "session keys", "ESP8266", "ESP32"],
+  "authors": [{"name": "AploSDK Team", "maintainer": true}],
+  "license": "MIT",
+  "repository": {"type": "git", "url": "https://github.com/AploCoin/MiningEmbed.git"},
+  "frameworks": "arduino",
+  "platforms": ["espressif8266", "espressif32"],
+  "dependencies": {"AploEmbed": ">=0.1.0"},
+  "export": {
+    "include": ["src", "examples", "docs", "README.md", "LICENSE", "library.json", "library.properties", "keywords.txt"],
+    "exclude": ["examples/**/.pio", "examples/**/.pio/**"]
+  }
+}

@@ -53,6 +53,9 @@ struct MiningSession {
     uint64_t expiry = 0;
 };
 
+// Parse a positive, canonical decimal chain ID at full EIP-155 width.
+bool parseMiningChainId(const char* text, uint256_t& out);
+
 // Parse owner-approved public metadata. Chain ID and GAPLO use decimal base units.
 bool parseMiningSession(
     const char* owner,

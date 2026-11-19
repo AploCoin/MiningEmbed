@@ -72,6 +72,10 @@ bool positiveDecimal(const char* text, uint256_t& out) {
 }
 } // namespace
 
+bool parseMiningChainId(const char* text, uint256_t& out) {
+    return positiveDecimal(text, out);
+}
+
 bool parseMiningSession(
     const char* owner,
     const char* signer,
@@ -91,7 +95,7 @@ bool parseMiningSession(
         return false;
     }
 
-    if (!positiveDecimal(chainId, parsed.chainId)) {
+    if (!parseMiningChainId(chainId, parsed.chainId)) {
         return false;
     }
 

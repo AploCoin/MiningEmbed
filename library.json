@@ -1,6 +1,6 @@
 {
   "name": "MiningEmbed",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Bounded session and ordinary EIP155 mining with durable recovery for AploCoin.",
   "keywords": ["AploCoin", "mining", "session keys", "ESP8266", "ESP32"],
   "authors": [{"name": "AploSDK Team", "maintainer": true}],
@@ -8,7 +8,7 @@
   "repository": {"type": "git", "url": "https://github.com/AploCoin/MiningEmbed.git"},
   "frameworks": "arduino",
   "platforms": ["espressif8266", "espressif32"],
-  "dependencies": {"AploEmbed": ">=0.1.0"},
+  "dependencies": {"AploEmbed": ">=0.2.0"},
   "export": {
     "include": ["src", "examples", "docs", "README.md", "LICENSE", "library.json", "library.properties", "keywords.txt"],
     "exclude": ["examples/**/.pio", "examples/**/.pio/**"]

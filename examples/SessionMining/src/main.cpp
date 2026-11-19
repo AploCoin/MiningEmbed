@@ -29,6 +29,7 @@ static bool loadConfirmedSession(aplo::SessionKey& key, MiningSession& session) 
         key.Clear();
         return false;
     }
+
     return true;
 }
 
@@ -42,6 +43,7 @@ void loop() {
         delay(100);
         return;
     }
+
     // ESP8266 needs network readiness before constructing TLS state.
 #if __has_include("AploTrustProfile.h")
     static Web3 web3(APLO_TRUST_PRIMARY_URL, APLO_TRUST_FALLBACK_URL);
@@ -67,8 +69,11 @@ void loop() {
     const Status status = miner.step(2000, submission);
     Serial.println(statusName(status));
     if (!submission.hash.empty()) {
-        Serial.printf("state=%u hash=%s\n", static_cast<unsigned>(submission.state),
-                      submission.hash.c_str());
+        Serial.printf(
+            "state=%u hash=%s\n",
+            static_cast<unsigned>(submission.state),
+            submission.hash.c_str()
+        );
     }
     delay(1000); // The application owns cadence and unresolved-transaction recovery.
 }

@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string>
+
 namespace miningembed {
 namespace detail {
 std::string encodeCall(const char* signature, const std::string* argument);

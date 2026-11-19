@@ -8,12 +8,15 @@ int nibble(char character) {
     if (character >= '0' && character <= '9') {
         return character - '0';
     }
+
     if (character >= 'a' && character <= 'f') {
         return character - 'a' + 10;
     }
+
     if (character >= 'A' && character <= 'F') {
         return character - 'A' + 10;
     }
+
     return -1;
 }
 
@@ -31,12 +34,14 @@ bool decodeHex(const char* hex, uint8_t* output, size_t capacity, size_t bytes) 
     if (!hex || !output || bytes > capacity || bytes > SIZE_MAX / 2) {
         return false;
     }
+
     if (hex[0] == '0' && (hex[1] == 'x' || hex[1] == 'X')) {
         hex += 2;
     }
     if (strlen(hex) != bytes * 2) {
         return false;
     }
+
     // Validate first: malformed input must not partially overwrite the output.
     for (size_t index = 0; index < bytes * 2; ++index) {
         if (nibble(hex[index]) < 0) {
@@ -58,11 +63,18 @@ bool sameChallenge(const MinerParams& first, const MinerParams& second) {
            memcmp(first.prevHash, second.prevHash, 32) == 0;
 }
 
-bool hashNonce(const MinerParams& params, const uint8_t* nonce, size_t nonceSize, uint8_t* output,
-               size_t capacity, HashFunction hash) {
+bool hashNonce(
+    const MinerParams& params,
+    const uint8_t* nonce,
+    size_t nonceSize,
+    uint8_t* output,
+    size_t capacity,
+    HashFunction hash
+) {
     if (!params.valid || !nonce || nonceSize != 32 || !output || capacity < 32 || !hash) {
         return false;
     }
+
     uint8_t packed[148];
     packChallenge(params, packed);
     memcpy(packed + 20, nonce, 32);
@@ -70,19 +82,35 @@ bool hashNonce(const MinerParams& params, const uint8_t* nonce, size_t nonceSize
     return true;
 }
 
-bool validProof(const MinerParams& params, const uint8_t* nonce, size_t nonceSize,
-                HashFunction hash) {
+bool validProof(
+    const MinerParams& params,
+    const uint8_t* nonce,
+    size_t nonceSize,
+    HashFunction hash
+) {
     uint8_t digest[32];
     return hashNonce(params, nonce, nonceSize, digest, sizeof(digest), hash) &&
            memcmp(digest, params.target, 32) < 0;
 }
 
-WorkResult search(const MinerParams& params, uint32_t attempts, Candidate& out, HashFunction hash,
-                  RandomFunction random, YieldFunction cooperate) {
+WorkResult search(
+    const MinerParams& params,
+    uint32_t attempts,
+    Candidate& out,
+    HashFunction hash,
+    RandomFunction random,
+    YieldFunction cooperate
+) {
     out = Candidate();
-    if (!params.valid || !hash || !random || !cooperate || attempts == 0 || attempts > 2000) {
+    if (!params.valid || !hash || !random || !cooperate) {
         return WorkResult::InvalidArgument;
     }
+
+    constexpr uint32_t maxAttempts = 2000;
+    if (attempts == 0 || attempts > maxAttempts) {
+        return WorkResult::InvalidArgument;
+    }
+
     uint8_t packed[148];
     uint8_t digest[32];
     packChallenge(params, packed);
@@ -94,6 +122,7 @@ WorkResult search(const MinerParams& params, uint32_t attempts, Candidate& out, 
         if (!random(nonce, 32)) {
             return WorkResult::RandomUnavailable;
         }
+
         hash(packed, sizeof(packed), digest);
         if (memcmp(digest, params.target, 32) < 0) {
             out.params = params;

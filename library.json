@@ -1,7 +1,7 @@
 {
   "name": "MiningEmbed",
   "version": "0.1.0",
-  "description": "Bounded session-key mining for AploCoin embedded applications.",
+  "description": "Bounded session and ordinary EIP155 mining with durable recovery for AploCoin.",
   "keywords": ["AploCoin", "mining", "session keys", "ESP8266", "ESP32"],
   "authors": [{"name": "AploSDK Team", "maintainer": true}],
   "license": "MIT",

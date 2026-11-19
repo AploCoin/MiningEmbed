@@ -20,7 +20,9 @@ enum class Status {
     RandomUnavailable,
     Busy,
     SignFailed,
-    BroadcastUncertain
+    BroadcastUncertain,
+    JournalFailed,
+    RecoveryRequired
 };
 const char* statusName(Status status);
 enum class SubmissionState { NotSent, Broadcast, Pending, Reverted, Confirmed, Uncertain };
@@ -29,6 +31,17 @@ struct Submission {
     SubmissionState state = SubmissionState::NotSent;
     std::string hash;
 };
+
+struct PendingTransaction {
+    uint64_t nonce = 0;
+    std::string hash;
+    std::string raw;
+    uint8_t proof[32] = {};
+    uint256_t maxFee = 0;
+};
+
+// Must atomically persist before returning true. nullptr clears a resolved record.
+using JournalWrite = bool (*)(const PendingTransaction* pending, void* context);
 
 // Copy public authorization from an owner-approved, confirmed registration.
 // Only GAplo / mine(bytes32), zero APLO, finite GAPLO are accepted.
@@ -53,7 +66,21 @@ bool parseMiningSession(
 class MiningEmbed {
 public:
     // Both borrowed references must outlive this object. No implicit owner key.
-    MiningEmbed(aplo::SessionKeys& rpc, aplo::SessionKey& key, const MiningSession& session);
+    MiningEmbed(
+        aplo::SessionKeys& rpc,
+        aplo::SessionKey& key,
+        const MiningSession& session,
+        JournalWrite write = nullptr,
+        void* context = nullptr
+    );
+    // Ordinary EIP155 signing: owner and miner are derived from the retained key.
+    MiningEmbed(
+        aplo::SessionKeys& rpc,
+        aplo::SessionKey& key,
+        const uint256_t& chainId,
+        JournalWrite write = nullptr,
+        void* context = nullptr
+    );
     MiningEmbed(const MiningEmbed&) = delete;
     MiningEmbed& operator=(const MiningEmbed&) = delete;
     // Poll the outstanding share or run one bounded read/search/submit cycle.
@@ -64,13 +91,15 @@ public:
     Status submit(const Candidate& candidate, Submission& out);
     // Poll once; caller controls timing. RPC failure retains unresolved state/hash.
     Status receipt(Submission& out);
+    // Restore before step(). False leaves a fail-closed lock; operator must reconcile.
+    bool restore(const PendingTransaction& pending);
 
     const aplo::SessionResult& rpcError() const {
         return rpcError_;
     }
 
     bool unresolved() const {
-        return !outstanding_.hash.empty();
+        return locked_;
     }
 
 private:
@@ -84,6 +113,9 @@ private:
     );
     Status authorizeTransaction(const Candidate& candidate, aplo::NativeTransaction& transaction);
     Status broadcast(const aplo::NativeTransaction& transaction, Submission& out);
+    Status sendPending(Submission& out);
+    Status recover(Submission& out);
+    bool decodePending(const PendingTransaction& pending, aplo::NativeTransaction& tx);
     Status readWork(MinerParams& out, uint64_t block);
     bool configurationValid() const;
     bool checked(const aplo::SessionResult& result);
@@ -99,6 +131,14 @@ private:
     MiningSession session_;
     aplo::SessionResult rpcError_;
     Submission outstanding_;
+    PendingTransaction pending_;
+    JournalWrite write_;
+    void* context_;
+    bool direct_ = false;
+    bool locked_ = false;
+    bool journalReady_ = true;
+    bool recordValid_ = true;
+    bool retryAfterRestore_ = false;
 };
 } // namespace miningembed
 #endif

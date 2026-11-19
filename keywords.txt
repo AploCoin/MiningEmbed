@@ -8,3 +8,6 @@ findCandidate	KEYWORD2
 revalidate	KEYWORD2
 submit	KEYWORD2
 receipt	KEYWORD2
+PendingTransaction	KEYWORD1
+JournalWrite	KEYWORD1
+restore	KEYWORD2

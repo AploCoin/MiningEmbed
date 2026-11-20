@@ -104,11 +104,11 @@ bool FirmwareRuntime::poll(Stream& port) {
     return false;
 }
 
-void FirmwareRuntime::serveRpcIdle(void* context) {
+void FirmwareRuntime::serveRpcProgress(void* context) {
     auto& app = *static_cast<FirmwareRuntime*>(context);
     app.measure(millis());
     if (app.port_) {
-        app.serial_.poll(*app.port_, app.state_, true);
+        app.serial_.pollProgress(*app.port_, app.state_);
     }
 }
 
@@ -184,7 +184,9 @@ bool FirmwareRuntime::startMiner(const Config& config) {
     if (!web3_) {
         return false;
     }
-    web3_->setRpcIdleCallback(serveRpcIdle, this);
+    if (!web3_->setRpcProgressCallback(serveRpcProgress, this)) {
+        web3_->setRpcIdleCallback(serveRpcProgress, this);
+    }
     rpc_.reset(new (std::nothrow) aplo::SessionKeys(*web3_));
     if (!rpc_) {
         return false;

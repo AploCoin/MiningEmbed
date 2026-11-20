@@ -36,6 +36,9 @@ public:
     ~SerialConfig();
     // Bounded nonblocking input. Never print the supplied state verbatim.
     void poll(Stream& port, const char* state, bool readOnly = false);
+    // Safe at a core yield inside TLS: one public frame, fixed reply storage,
+    // and writes only to available TX space. Mutating frames wait for poll().
+    void pollProgress(Stream& port, const char* state);
 
     bool restartRequested() const {
         return store_.restartRequested();
@@ -47,6 +50,7 @@ public:
     }
 
 private:
+    void pollInput(Stream& port, Stream& identity, const char* state, bool readOnly, bool progress);
     void command(Stream& port, const char* state);
     bool publicCommand(Stream& port, uint32_t id, const char* cmd, unsigned count);
     void recoveryCommand(Stream& port, uint32_t id, const char* cmd, const char* argument);
@@ -69,6 +73,9 @@ private:
     bool retryWait_ = false;
     bool enrollmentClosed_ = false;
     bool frameReady_ = false, recoveryActive_ = false, recoveryIssued_ = false;
+    char progressReply_[512] = {};
+    size_t progressLength_ = 0, progressOffset_ = 0;
+    bool progressActive_ = false;
     uint32_t recoveryMs_ = 0;
     uint8_t recoveryDigest_[32] = {}, recoveryVerifier_[32] = {};
 };

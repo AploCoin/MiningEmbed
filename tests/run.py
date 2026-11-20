@@ -53,6 +53,28 @@ def test_work(base, build):
     subprocess.run([str(binary)], check=True, env=TEST_ENV)
 
 
+def test_progress(base, build, shared_objects):
+    objects = list(shared_objects)
+    for index, source in enumerate([
+        ROOT / "src/provisioning/DeviceConfig.cpp",
+        ROOT / "src/provisioning/SerialConfig.cpp",
+        ROOT / "tests/serial_progress_test.cpp",
+    ]):
+        output = build / f"progress_{index}.o"
+        subprocess.run([
+            "c++", "-std=c++11", *SANITIZERS, "-O1", "-Wall", "-Wextra", "-Werror",
+            "-ffunction-sections", "-fdata-sections",
+            "-I" + str(ROOT / "tests/provisioning_stubs"),
+            "-I" + str(ROOT / "src"), "-I" + str(base / "src"),
+            "-c", str(source), "-o", str(output),
+        ], check=True)
+        objects.append(str(output))
+    binary = build / "serial_progress_test"
+    strip_flag = "-Wl,-dead_strip" if sys.platform == "darwin" else "-Wl,--gc-sections"
+    subprocess.run(["c++", *SANITIZERS, *objects, strip_flag, "-o", str(binary)], check=True)
+    subprocess.run([str(binary)], check=True, env=TEST_ENV)
+
+
 def test_facade(base, build):
     flags = [
         *SANITIZERS,
@@ -95,6 +117,7 @@ def test_facade(base, build):
         base / "src/uint256/uint128_t.cpp",
         base / "src/uint256/uint256_t.cpp",
         ROOT / "src/MiningWork.cpp",
+        ROOT / "src/MiningAbi.cpp",
         ROOT / "src/MiningEmbed.cpp",
         ROOT / "tests/host_platform.cpp",
         ROOT / "tests/facade_test.cpp",
@@ -128,6 +151,8 @@ def test_facade(base, build):
     )
     subprocess.run([str(binary)], check=True, env=TEST_ENV)
 
+    return objects[:-1]
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -152,7 +177,8 @@ def main():
     build = arguments.build_dir.resolve()
     build.mkdir(parents=True, exist_ok=True)
     test_work(base, build)
-    test_facade(base, build)
+    shared_objects = test_facade(base, build)
+    test_progress(base, build, shared_objects)
 
 
 if __name__ == "__main__":

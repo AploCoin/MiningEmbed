@@ -1,5 +1,6 @@
 #include "MiningEmbed.h"
 #include "MiningPlatform.h"
+#include <session/SessionEncoding.h>
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
@@ -136,7 +137,8 @@ struct Fixture {
 
     string handleCall(const string& parameters) {
         assert(parameters.find("\"from\":\"" + accountOwner + "\"") != string::npos);
-        const string getSession = detail::encodeCall("getSession(address)", &signer);
+        const string getSession =
+            aplo::detail::functionSelector("getSession(address)") + aplo::detail::abiAddress(signer);
         if (parameters.find(getSession) != string::npos) {
             ++reads;
             const bool live = active && (revokeAtRead == 0 || reads < revokeAtRead);
@@ -1184,7 +1186,33 @@ static void testWorkCacheAndAccounting() {
     assert(miner.hashesTested() == 0);
 }
 
+static void testMiningAbi() {
+    const string mixedAddress = "0xABCDEFabcdefABCDEFabcdefABCDEFabcdefABCD";
+    const string proof = "0x" + string(64, 'a');
+    for (const char* signature : {"miner_params(address)", "getStake(address)"}) {
+        const string encoded = detail::encodeCall(signature, &mixedAddress);
+        assert(aplo::detail::lowerHex(encoded) ==
+               aplo::detail::functionSelector(signature) + aplo::detail::abiAddress(mixedAddress));
+        assert(encoded.substr(34) == mixedAddress.substr(2));
+        assert(detail::encodeCall(signature, &proof).empty());
+        assert(detail::encodeCall(signature, nullptr).empty());
+    }
+    assert(detail::encodeCall("mine(bytes32)", &proof) == "0x2FDC505E" + proof.substr(2));
+    assert(detail::encodeCall("mine(bytes32)", &mixedAddress).empty());
+    assert(aplo::detail::lowerHex(detail::encodeCall("DEFAULT_DIFFICULTY()", nullptr)) ==
+           aplo::detail::functionSelector("DEFAULT_DIFFICULTY()"));
+    assert(detail::encodeCall("DEFAULT_DIFFICULTY()", &proof).empty());
+    assert(detail::encodeCall(nullptr, nullptr).empty());
+    assert(detail::encodeCall("unknown(bytes32)", &proof).empty());
+    string malformed = proof;
+    malformed.back() = 'g';
+    assert(detail::encodeCall("mine(bytes32)", &malformed).empty());
+    malformed = "0X" + proof.substr(2);
+    assert(detail::encodeCall("mine(bytes32)", &malformed).empty());
+}
+
 int main() {
+    testMiningAbi();
     testWorkCacheAndAccounting();
     testRuntimeRetry();
     testRuntimeRetryGuards();

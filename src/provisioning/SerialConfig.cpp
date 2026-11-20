@@ -15,6 +15,32 @@ bool SessionPlatformRandom(uint8_t* bytes, size_t length);
 namespace miningembed {
 namespace provisioning {
 namespace {
+// Stream writes are captured without touching the physical UART. The source's
+// input is nonblocking; only public commands are dispatched through this view.
+class ProgressStream : public Stream {
+public:
+    ProgressStream(Stream& source, char* output, size_t capacity)
+        : source_(source), output_(output), capacity_(capacity) {}
+    int available() override { return source_.available(); }
+    int read() override { return source_.read(); }
+    int peek() { return -1; }
+    void flush() {}
+    size_t write(uint8_t byte) override {
+        if (length < capacity_) {
+            output_[length++] = static_cast<char>(byte);
+        } else {
+            overflow = true;
+        }
+        return 1;
+    }
+    size_t length = 0;
+    bool overflow = false;
+private:
+    Stream& source_;
+    char* output_;
+    size_t capacity_;
+};
+
 void erase(std::string& s) {
     if (!s.empty()) {
         wipe(&s[0], s.size());
@@ -264,6 +290,7 @@ SerialConfig::~SerialConfig() {
     clearStage();
     clearLine();
     clearRecovery();
+    wipe(progressReply_, sizeof(progressReply_));
 }
 
 void SerialConfig::clearLine() {
@@ -291,7 +318,53 @@ void SerialConfig::clearStage() {
 }
 
 void SerialConfig::poll(Stream& port, const char* state, bool readOnly) {
-    if (port_ != &port) {
+    if (progressActive_) {
+        return;
+    }
+    progressActive_ = true;
+    // Preserve reply ordering when returning from a TLS progress callback.
+    if (port_ == &port) {
+        while (progressOffset_ < progressLength_) {
+            port.write(static_cast<uint8_t>(progressReply_[progressOffset_++]));
+        }
+    }
+    progressLength_ = progressOffset_ = 0;
+    pollInput(port, port, state, readOnly, false);
+    progressActive_ = false;
+}
+
+void SerialConfig::pollProgress(Stream& port, const char* state) {
+    if (progressActive_ || (port_ && port_ != &port)) {
+        return;
+    }
+    progressActive_ = true;
+    if (progressOffset_ == progressLength_) {
+        progressLength_ = progressOffset_ = 0;
+        ProgressStream captured(port, progressReply_, sizeof(progressReply_));
+        pollInput(captured, port, state, true, true);
+        progressLength_ = captured.length;
+        if (captured.overflow) {
+            const char error[] = "APLO1 0 ERR unavailable\n";
+            memcpy(progressReply_, error, sizeof(error) - 1);
+            progressLength_ = sizeof(error) - 1;
+        }
+    }
+    // Even a large TX FIFO cannot make one callback monopolize a core yield.
+    const int available = port.availableForWrite();
+    unsigned budget = available > 64 ? 64 : (available > 0 ? unsigned(available) : 0);
+    while (budget-- && progressOffset_ < progressLength_) {
+        if (!port.write(static_cast<uint8_t>(progressReply_[progressOffset_]))) {
+            break;
+        }
+        ++progressOffset_;
+    }
+    progressActive_ = false;
+}
+
+void SerialConfig::pollInput(
+    Stream& port, Stream& identity, const char* state, bool readOnly, bool progress
+) {
+    if (port_ != &identity) {
         if (port_) {
             authenticated_ = false;
             clearStage();
@@ -299,17 +372,17 @@ void SerialConfig::poll(Stream& port, const char* state, bool readOnly) {
             clearRecovery();
             discard_ = false;
         }
-        port_ = &port;
+        port_ = &identity;
     }
     uint32_t now = millis();
     if (uint32_t(now - bootMs_) >= 120000) {
         enrollmentClosed_ = true;
     }
-    if (authenticated_ && uint32_t(now - authMs_) >= 120000) {
+    if (!progress && authenticated_ && uint32_t(now - authMs_) >= 120000) {
         authenticated_ = false;
         clearStage();
     }
-    if (staged_ && uint32_t(now - stageMs_) >= 60000) {
+    if (!progress && staged_ && uint32_t(now - stageMs_) >= 60000) {
         clearStage();
     }
     if (recoveryActive_ && uint32_t(now - recoveryMs_) >= 120000) {
@@ -349,6 +422,9 @@ void SerialConfig::poll(Stream& port, const char* state, bool readOnly) {
             }
             clearLine();
             discard_ = false;
+            if (progress) {
+                return;
+            }
             continue;
         }
         if (discard_) {

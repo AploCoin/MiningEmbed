@@ -37,7 +37,7 @@ private:
     void pauseTrust(bool pause);
     void measure(uint32_t now);
     void runStep(uint32_t now);
-    static void serveRpcIdle(void* context);
+    static void serveRpcProgress(void* context);
     const char* runDevice();
 
     DeviceConfig store_;

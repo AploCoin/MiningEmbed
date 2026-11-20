@@ -1,6 +1,6 @@
 # MiningEmbed
 
-MiningEmbed 0.1.0 is an Arduino/PlatformIO library for AploCoin session-key and ordinary EIP155 mining. It reads miner parameters, searches a bounded batch, rechecks the challenge and submits a share. It depends on AploEmbed's session API, ABI encoder, Keccak, hardware CSPRNG, native transaction signing and TLS/RPC transport.
+MiningEmbed 0.1.0 is an Arduino/PlatformIO library for AploCoin session-key and ordinary EIP155 mining. It reads miner parameters, searches a bounded batch, rechecks the challenge and submits a share. It depends on AploEmbed's session API, Keccak, hardware CSPRNG, native transaction signing and TLS/RPC transport. Its four fixed mining calls use a small ABI encoder, so small applications do not link the general `Contract` encoder.
 
 The application owns Wi-Fi, TLS trust configuration, provisioning, scheduling, display, retry policy and key persistence. Select session or Direct Private Key mode explicitly. Session mode never falls back to owner signing. Direct mode borrows a retained `SessionKey` containing the ordinary wallet secret; it does not export or copy that secret.
 
@@ -95,7 +95,7 @@ The final recheck is a client-side guard: the chain can change after signing, so
 python3 tests/run.py --aploembed /path/to/AploEmbed
 ```
 
-Host tests use the dependency's actual uint256, SessionKeys and Trezor code under ASan/UBSan, an injected RPC fixture, and a host-only platform adapter. Production uses AploEmbed `Contract`/`Crypto` and Arduino yielding. They exercise both modes, full chain/nonce domains, fail-closed journal writes/clears, corrupt records, power loss before/after send, exact-byte recovery, nonce conflicts, live revocation and receipt resolution. They verify portable behavior; they do not establish live ESP heap, TLS performance or hash rate.
+Host tests use the dependency's actual uint256, SessionKeys and Trezor code under ASan/UBSan, the production fixed mining ABI encoder, an injected RPC fixture, and a host-only crypto/clock adapter. Production uses AploEmbed `Crypto` and Arduino yielding. They exercise both modes, full chain/nonce domains, fail-closed journal writes/clears, corrupt records, power loss before/after send, exact-byte recovery, nonce conflicts, live revocation and receipt resolution. A separate Serial test checks progress reply backpressure, nested callbacks and deferred mutation. They verify portable behavior; they do not establish live ESP heap, TLS performance or hash rate.
 
 Derived portions retain the AploEmbed MIT license and original attribution. No second cryptographic implementation or network stack is bundled.
 

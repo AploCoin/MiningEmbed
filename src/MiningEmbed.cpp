@@ -783,7 +783,9 @@ bool rlpItem(
 }
 } // namespace
 
-bool MiningEmbed::decodePending(const PendingTransaction& pending, aplo::NativeTransaction& tx) {
+bool MiningEmbed::decodePending(
+    const PendingTransaction& pending, aplo::NativeTransaction& tx, bool verifySignature
+) {
     if (!configurationValid() || pending.nonce == UINT64_MAX || pending.raw.size() < 4 ||
         pending.raw.size() > 514 || pending.raw.size() % 2 || pending.hash.size() != 66) {
         return false;
@@ -866,6 +868,10 @@ bool MiningEmbed::decodePending(const PendingTransaction& pending, aplo::NativeT
         tx.gasPrice * uint256_t(tx.gasLimit) != pending.maxFee) {
         return false;
     }
+    // A live retry owns the same immutable bytes it signed or verified on restore.
+    if (!verifySignature) {
+        return true;
+    }
     string signedRaw;
     return checked(
                aplo::SessionKeys::SignTransaction(
@@ -888,7 +894,7 @@ bool MiningEmbed::restore(const PendingTransaction& pending) {
     outstanding_.hash = pending.hash.size() == 66 ? pending.hash : string();
     outstanding_.state = SubmissionState::Uncertain;
     aplo::NativeTransaction tx;
-    recordValid_ = decodePending(pending, tx);
+    recordValid_ = decodePending(pending, tx, true);
     if (!recordValid_) {
         return false;
     }
@@ -925,7 +931,7 @@ Status MiningEmbed::recover(Submission& out, uint32_t nowMs) {
     lastRetryMs_ = nowMs;
 
     aplo::NativeTransaction tx;
-    if (!decodePending(pending_, tx)) {
+    if (!decodePending(pending_, tx, false)) {
         return Status::RecoveryRequired;
     }
     aplo::SessionStatus authorization;

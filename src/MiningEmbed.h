@@ -127,7 +127,9 @@ private:
     Status broadcast(const aplo::NativeTransaction& transaction, Submission& out);
     Status sendPending(Submission& out, uint32_t nowMs);
     Status recover(Submission& out, uint32_t nowMs);
-    bool decodePending(const PendingTransaction& pending, aplo::NativeTransaction& tx);
+    bool decodePending(
+        const PendingTransaction& pending, aplo::NativeTransaction& tx, bool verifySignature
+    );
     Status readWork(MinerParams& out, uint64_t block);
     bool configurationValid() const;
     bool checked(const aplo::SessionResult& result);

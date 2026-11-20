@@ -88,7 +88,7 @@ FirmwareRuntime::~FirmwareRuntime() = default;
 void FirmwareRuntime::begin() {
     lastSampleAt_ = millis();
     if (store_.begin() && store_.ready()) {
-        snapshot_.batch = store_.config().hashesPerStep;
+        snapshot_.batch = std::min(uint32_t(64), store_.config().hashesPerStep);
         startNetwork_(store_.config());
     }
 }
@@ -143,7 +143,7 @@ void FirmwareRuntime::runStep(uint32_t now) {
     snapshot_.hashes += hashes;
     if (hashes && duration) {
         snapshot_.activeHashesPerSecond = static_cast<uint32_t>(uint64_t(hashes) * 1000000 / duration);
-        if (hashes >= snapshot_.batch) {
+        if (hashes >= 8 || hashes >= snapshot_.batch) {
             const uint32_t target = static_cast<uint32_t>(uint64_t(hashes) * sliceUs / duration);
             const uint32_t lower = std::max(uint32_t(1), snapshot_.batch / 2);
             const uint32_t upper = std::min(maxBatch, snapshot_.batch * 2);

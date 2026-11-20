@@ -10,7 +10,7 @@ Clone MiningEmbed and [AploEmbed](https://github.com/AploCoin/AploEmbed) from Gi
 
 For Arduino, put the two library directories in your sketchbook `libraries/` directory and include `<MiningEmbed.h>`. Supported architectures: ESP8266 and ESP32, including ESP32-C3.
 
-From the MiningEmbed checkout, build the example with PlatformIO. It uses this checkout and the sibling `AploEmbed` checkout. This SDK must expose checked `SessionKeys::LatestNonce`; older published pins do not provide the recovery API.
+Open `examples/SessionMining` in PlatformIO. Its project file pins published revisions of both libraries, so the example also builds from a separately copied folder.
 
 ~~~sh
 pio run -d examples/SessionMining -e esp12e -e esp32dev -e esp32-c3-devkitm-1
@@ -102,3 +102,11 @@ Derived portions retain the AploEmbed MIT license and original attribution. No s
 ## HTTPS trust
 
 Set the CA on Web3 or place a generated AploTrustProfile.h in the example's include directory. See [AploEmbed TLS trust](https://github.com/AploCoin/AploEmbed/blob/master/docs/tls-trust.md) for local, public and custom RPCs. The example also needs Wi-Fi, time synchronization and a confirmed mining session. Use FirmwareEmbed for complete board applications.
+
+## Firmware provisioning
+
+Applications can opt into `<provisioning/FirmwareRuntime.h>` with HTTPS enabled.
+The library supplies the `APLO1` Serial protocol, versioned configuration snapshots
+and the pending transaction journal. The board implements `FlashBackend`, Wi-Fi and
+clock polling, diagnostics, console setup and reboot. A single firmware runtime
+uses one flash backend and the selected console for the lifetime of a boot.

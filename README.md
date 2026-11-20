@@ -10,7 +10,7 @@ Clone MiningEmbed and [AploEmbed](https://github.com/AploCoin/AploEmbed) from Gi
 
 For Arduino, put the two library directories in your sketchbook `libraries/` directory and include `<MiningEmbed.h>`. Supported architectures: ESP8266 and ESP32, including ESP32-C3.
 
-Open `examples/SessionMining` in PlatformIO. Its project file pins published revisions of both libraries, so the example also builds from a separately copied folder.
+Open `examples/SessionMining` in PlatformIO. PlatformIO downloads the latest code from both libraries' default GitHub branches, including when the example is copied on its own. Use `pio pkg update` to refresh installed dependencies.
 
 ~~~sh
 pio run -d examples/SessionMining -e esp12e -e esp32dev -e esp32-c3-devkitm-1

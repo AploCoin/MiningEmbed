@@ -198,21 +198,56 @@ void digest(const std::string& b, uint8_t out[32]) {
     wipe(&ctx, sizeof(ctx));
 }
 
-std::string encode(const Config& c, const miningembed::PendingTransaction* p, uint64_t generation) {
-    size_t capacity = Header + 3 + 64 + 24 + 17 + c.ssid.size() + c.password.size() +
-                      c.primaryUrl.size() + c.fallbackUrl.size() + c.primaryCa.size() +
-                      c.fallbackCa.size() + c.owner.size() + c.signer.size() + c.chainId.size() +
-                      c.gaploBudget.size() + c.ntpPrimary.size() + c.ntpFallback.size();
-    if (p) {
-        capacity += 8 + 6 + p->hash.size() + p->raw.size() + 32 + p->maxFee.str(16).size();
-    }
-    std::string b("APFC", 4);
+std::string header(const char* magic, unsigned version, uint64_t generation, size_t capacity) {
+    std::string b(magic, 4);
     b.reserve(capacity);
-    number(b, 1, 2);
+    number(b, version, 2);
     number(b, 0, 2);
     number(b, generation, 8);
     number(b, 0, 4);
     b.append(32, '\0');
+    return b;
+}
+
+void seal(std::string& b) {
+    size_t size = b.size() - Header;
+    for (unsigned i = 0; i < 4; ++i) {
+        b[16 + i] = static_cast<char>(size >> (8 * i));
+    }
+    uint8_t d[32];
+    digest(b, d);
+    memcpy(&b[20], d, 32);
+    wipe(d, sizeof(d));
+}
+
+unsigned readHeader(Reader& r, const char* magic, size_t maximum, uint64_t& gen) {
+    const auto& b = r.b;
+    if (b.size() < Header || b.size() > maximum || b.compare(0, 4, magic) != 0) {
+        return 0;
+    }
+    r.at = 4;
+    unsigned version = r.number(2);
+    if (r.number(2) != 0) {
+        return 0;
+    }
+    gen = r.number(8);
+    if (!gen || r.number(4) != b.size() - Header) {
+        return 0;
+    }
+    uint8_t d[32];
+    digest(b, d);
+    bool ok = equal(d, reinterpret_cast<const uint8_t*>(b.data() + 20), 32);
+    wipe(d, sizeof(d));
+    r.at = Header;
+    return ok ? version : 0;
+}
+
+std::string encodeConfig(const Config& c, uint64_t generation, uint64_t floor) {
+    size_t capacity = Header + 3 + 64 + 24 + 24 + c.ssid.size() + c.password.size() +
+                      c.primaryUrl.size() + c.fallbackUrl.size() + c.primaryCa.size() +
+                      c.fallbackCa.size() + c.owner.size() + c.signer.size() + c.chainId.size() +
+                      c.gaploBudget.size() + c.ntpPrimary.size() + c.ntpFallback.size();
+    auto b = header("APFC", 2, generation, capacity);
     number(b, static_cast<uint8_t>(c.mode), 1);
     number(b, c.enabled, 1);
     number(b, c.keyPresent, 1);
@@ -233,6 +268,23 @@ std::string encode(const Config& c, const miningembed::PendingTransaction* p, ui
     number(b, c.expiry, 8);
     number(b, c.hashesPerStep, 4);
     number(b, c.intervalMs, 4);
+    number(b, floor, 8);
+    seal(b);
+    return b;
+}
+
+bool samePending(
+    const miningembed::PendingTransaction* a, const miningembed::PendingTransaction* b
+) {
+    if (!a || !b) {
+        return a == b;
+    }
+    return a->nonce == b->nonce && a->hash == b->hash && a->raw == b->raw &&
+           a->maxFee == b->maxFee && equal(a->proof, b->proof, sizeof(a->proof));
+}
+
+std::string encodeJournal(const miningembed::PendingTransaction* p, uint64_t generation) {
+    auto b = header("APFJ", 1, generation, p ? DeviceConfig::MaxJournalRecord : Header + 1);
     number(b, p != nullptr, 1);
     if (p) {
         number(b, p->nonce, 8);
@@ -241,69 +293,12 @@ std::string encode(const Config& c, const miningembed::PendingTransaction* p, ui
         b.append(reinterpret_cast<const char*>(p->proof), 32);
         string(b, p->maxFee.str(16));
     }
-    size_t size = b.size() - Header;
-    for (unsigned i = 0; i < 4; ++i) {
-        b[16 + i] = static_cast<char>(size >> (8 * i));
-    }
-    uint8_t d[32];
-    digest(b, d);
-    memcpy(&b[20], d, 32);
-    wipe(d, sizeof(d));
+    seal(b);
     return b;
 }
 
-bool decode(
-    const std::string& b,
-    Config& c,
-    miningembed::PendingTransaction& p,
-    bool& has,
-    uint64_t& gen
-) {
-    if (b.size() < Header || b.size() > DeviceConfig::MaxRecord || b.compare(0, 4, "APFC") != 0) {
-        return false;
-    }
-    Reader r{b};
-    r.at = 4;
-    if (r.number(2) != 1 || r.number(2) != 0) {
-        return false;
-    }
-    gen = r.number(8);
-    if (!gen || r.number(4) != b.size() - Header) {
-        return false;
-    }
-    uint8_t d[32];
-    digest(b, d);
-    bool integrity = equal(d, reinterpret_cast<const uint8_t*>(b.data() + 20), 32);
-    wipe(d, sizeof(d));
-    if (!integrity) {
-        return false;
-    }
-    r.at = Header;
-    uint64_t mode = r.number(1), enabled = r.number(1), key = r.number(1);
-    if (mode > 1 || enabled > 1 || key > 1) {
-        return false;
-    }
-    c.mode = static_cast<Mode>(mode);
-    c.enabled = enabled;
-    c.keyPresent = key;
-    r.bytes(c.key, 32);
-    r.bytes(c.operatorVerifier, 32);
-    r.string(c.ssid, 32);
-    r.string(c.password, 64);
-    r.string(c.primaryUrl, 512);
-    r.string(c.fallbackUrl, 512);
-    r.string(c.primaryCa, DeviceConfig::MaxPem);
-    r.string(c.fallbackCa, DeviceConfig::MaxPem);
-    r.string(c.owner, 42);
-    r.string(c.signer, 42);
-    r.string(c.chainId, 78);
-    r.string(c.gaploBudget, 78);
-    r.string(c.ntpPrimary, 253);
-    r.string(c.ntpFallback, 253);
-    c.expiry = r.number(8);
-    c.hashesPerStep = r.number(4);
-    c.intervalMs = r.number(4);
-    uint64_t flag = r.number(1);
+bool decodePending(Reader& r, miningembed::PendingTransaction& p, bool& has) {
+    const uint64_t flag = r.number(1);
     if (flag > 1) {
         return false;
     }
@@ -328,7 +323,54 @@ bool decode(
             return false;
         }
     }
+    return r.ok && r.at == r.b.size();
+}
+
+bool decodeConfig(
+    const std::string& b, Config& c, miningembed::PendingTransaction& p, bool& has,
+    uint64_t& gen, uint64_t& floor, unsigned& version
+) {
+    Reader r{b};
+    version = readHeader(r, "APFC", DeviceConfig::MaxRecord, gen);
+    if (version != 1 && version != 2) {
+        return false;
+    }
+    uint64_t mode = r.number(1), enabled = r.number(1), key = r.number(1);
+    if (mode > 1 || enabled > 1 || key > 1) {
+        return false;
+    }
+    c.mode = static_cast<Mode>(mode);
+    c.enabled = enabled;
+    c.keyPresent = key;
+    r.bytes(c.key, 32);
+    r.bytes(c.operatorVerifier, 32);
+    r.string(c.ssid, 32);
+    r.string(c.password, 64);
+    r.string(c.primaryUrl, 512);
+    r.string(c.fallbackUrl, 512);
+    r.string(c.primaryCa, DeviceConfig::MaxPem);
+    r.string(c.fallbackCa, DeviceConfig::MaxPem);
+    r.string(c.owner, 42);
+    r.string(c.signer, 42);
+    r.string(c.chainId, 78);
+    r.string(c.gaploBudget, 78);
+    r.string(c.ntpPrimary, 253);
+    r.string(c.ntpFallback, 253);
+    c.expiry = r.number(8);
+    c.hashesPerStep = r.number(4);
+    c.intervalMs = r.number(4);
+    if (version == 1) {
+        if (!decodePending(r, p, has)) {
+            return false;
+        }
+    } else {
+        floor = r.number(8);
+    }
     return r.ok && r.at == b.size() && DeviceConfig::validate(c);
+}
+
+bool consecutive(uint64_t a, uint64_t b) {
+    return a > b ? a - b == 1 : b - a == 1;
 }
 
 } // namespace
@@ -422,56 +464,126 @@ bool DeviceConfig::validate(const Config& c) {
     );
 }
 
-bool DeviceConfig::begin() {
-    // Only once per instance: all returned borrowed buffers retain their lifetime.
-    if (!locked_ || generation_ || restart_) {
-        return false;
-    }
-    if (!backend_.begin()) {
-        return false;
-    }
-    bool found = false;
+bool DeviceConfig::loadJournal() {
     unsigned records = 0;
-    for (unsigned slot = 0; slot < 2; ++slot) {
+    for (unsigned slot = 2; slot < 4; ++slot) {
         std::string bytes;
-        auto result = backend_.read(slot, bytes);
+        const auto result = backend_.read(slot, bytes);
         if (result == FlashBackend::Read::Missing) {
             continue;
         }
-        if (result != FlashBackend::Read::Ok) {
-            clearString(bytes);
+        Reader r(bytes);
+        uint64_t gen = 0;
+        miningembed::PendingTransaction p;
+        bool has = false;
+        bool ok = result == FlashBackend::Read::Ok &&
+                  readHeader(r, "APFJ", MaxJournalRecord, gen) == 1 &&
+                  decodePending(r, p, has) &&
+                  (!records || consecutive(gen, journalGeneration_));
+        clearString(bytes);
+        if (ok && gen > journalGeneration_) {
+            clearString(pending_.raw);
+            pending_ = std::move(p);
+            hasPending_ = has;
+            journalGeneration_ = gen;
+            journalSlot_ = slot;
+        }
+        clearString(p.raw);
+        if (!ok) {
             return false;
+        }
+        ++records;
+    }
+    return records != 1 || journalGeneration_ == 1;
+}
+
+bool DeviceConfig::begin() {
+    // Only once per instance: all returned borrowed buffers retain their lifetime.
+    if (!locked_ || generation_ || restart_ || !backend_.begin()) {
+        return false;
+    }
+    unsigned records = 0, version = 0;
+    miningembed::PendingTransaction legacy;
+    bool hasLegacy = false;
+    for (unsigned slot = 0; slot < 2; ++slot) {
+        std::string bytes;
+        const auto result = backend_.read(slot, bytes);
+        if (result == FlashBackend::Read::Missing) {
+            continue;
         }
         Config c;
         miningembed::PendingTransaction p;
         bool has = false;
-        uint64_t gen = 0;
-        bool ok = decode(bytes, c, p, has, gen);
+        uint64_t gen = 0, floor = 0;
+        unsigned schema = 0;
+        const bool ok = result == FlashBackend::Read::Ok &&
+                        decodeConfig(bytes, c, p, has, gen, floor, schema) &&
+                        (!records || (consecutive(gen, generation_) &&
+                                      (gen > generation_ ? schema >= version : schema <= version)));
         clearString(bytes);
-        uint64_t gap = gen > generation_ ? gen - generation_ : generation_ - gen;
-        if (!ok || (found && gap != 1)) {
-            clearConfig(c);
-            clearString(p.raw);
-            return false;
-        }
-        ++records;
-        if (!found || gen > generation_) {
+        if (ok && gen > generation_) {
             clearConfig(config_);
-            clearString(pending_.raw);
+            clearString(legacy.raw);
             config_ = std::move(c);
-            pending_ = std::move(p);
-            hasPending_ = has;
+            legacy = std::move(p);
+            hasLegacy = has;
             generation_ = gen;
             activeSlot_ = slot;
-            found = true;
+            journalFloor_ = floor;
+            version = schema;
         }
         clearConfig(c);
         clearString(p.raw);
+        if (!ok) {
+            clearString(legacy.raw);
+            return false;
+        }
+        ++records;
     }
-    // After the second commit both slots must exist. Do not silently accept an
-    // NVS blob lost to CRC recovery or a deleted LittleFS slot as an empty journal.
-    if (records == 1 && generation_ != 1) {
+    if ((records == 1 && generation_ != 1) || !loadJournal() ||
+        (version == 2 && (journalGeneration_ < 2 || journalFloor_ > journalGeneration_))) {
+        clearString(legacy.raw);
         return false;
+    }
+
+    if (version != 2) {
+        const auto* expected = hasLegacy ? &legacy : nullptr;
+        // The journal is written before the new config. A power cut in between leaves
+        // a matching initial journal that the next boot can adopt.
+        if (journalGeneration_ && (journalGeneration_ > 2 ||
+                                   !samePending(expected, hasPending_ ? &pending_ : nullptr))) {
+            clearString(legacy.raw);
+            return false;
+        }
+        if (version == 1 && (!initializeJournal(expected) || !persist(config_, 0))) {
+            clearString(legacy.raw);
+            return false;
+        }
+        if (hasLegacy) {
+            clearString(pending_.raw);
+            pending_ = std::move(legacy);
+            hasPending_ = true;
+        }
+    }
+    clearString(legacy.raw);
+    if (journalGeneration_ <= journalFloor_) {
+        clearString(pending_.raw);
+        pending_ = miningembed::PendingTransaction{};
+        hasPending_ = false;
+    }
+    if (hasPending_ && !config_.enabled) {
+        return false;
+    }
+    if (config_.keyPresent) {
+        if (config_.mode == Mode::Session) {
+            walletAddress_ = lower(config_.owner);
+        } else {
+            aplo::SessionKey key;
+            if (!key.Import(config_.key)) {
+                return false;
+            }
+            walletAddress_ = key.Address();
+        }
     }
     locked_ = false;
     return true;
@@ -489,30 +601,50 @@ const miningembed::PendingTransaction* DeviceConfig::pending() const {
     return !locked_ && hasPending_ ? &pending_ : nullptr;
 }
 
-bool DeviceConfig::persist(
-    const Config& next,
-    const miningembed::PendingTransaction* pending,
-    bool immutable
-) {
-    if (locked_ || restart_ || generation_ == UINT64_MAX || (!immutable && !validate(next)) ||
-        (pending && !validPending(*pending))) {
-        return false;
-    }
-    std::string bytes = encode(next, pending, generation_ + 1);
-    if (bytes.size() > MaxRecord || !backend_.replace(1 - activeSlot_, bytes)) {
-        clearString(bytes);
-        locked_ = true;
-        return false;
-    }
-    // Verify exact readback before permitting any broadcast or reporting commit.
-    bool ok = backend_.verify(1 - activeSlot_, bytes);
+bool DeviceConfig::writeRecord(unsigned slot, std::string& bytes, size_t maximum) {
+    const bool ok = bytes.size() <= maximum && backend_.replace(slot, bytes) &&
+                    backend_.verify(slot, bytes);
     clearString(bytes);
     if (!ok) {
         locked_ = true;
+    }
+    return ok;
+}
+
+bool DeviceConfig::persist(const Config& next, uint64_t journalFloor) {
+    if (restart_ || generation_ == UINT64_MAX || !validate(next)) {
+        return false;
+    }
+    auto bytes = encodeConfig(next, generation_ + 1, journalFloor);
+    if (!writeRecord(1 - activeSlot_, bytes, MaxRecord)) {
         return false;
     }
     activeSlot_ = 1 - activeSlot_;
     ++generation_;
+    return true;
+}
+
+bool DeviceConfig::persistJournal(const miningembed::PendingTransaction* pending) {
+    if (restart_ || journalGeneration_ == UINT64_MAX || (pending && !validPending(*pending))) {
+        return false;
+    }
+    auto bytes = encodeJournal(pending, journalGeneration_ + 1);
+    const unsigned slot = 5 - journalSlot_;
+    if (!writeRecord(slot, bytes, MaxJournalRecord)) {
+        return false;
+    }
+    journalSlot_ = slot;
+    ++journalGeneration_;
+    return true;
+}
+
+bool DeviceConfig::initializeJournal(const miningembed::PendingTransaction* pending) {
+    // A live store always has both copies, including before its first broadcast.
+    while (journalGeneration_ < 2) {
+        if (!persistJournal(pending)) {
+            return false;
+        }
+    }
     return true;
 }
 
@@ -528,7 +660,7 @@ bool DeviceConfig::commit(const Config& next) {
                         next.fallbackUrl != config_.fallbackUrl)) {
         return false;
     }
-    if (!persist(next, hasPending_ ? &pending_ : nullptr)) {
+    if (!persist(next, journalFloor_)) {
         return false;
     }
     restart_ = true;
@@ -540,14 +672,18 @@ bool DeviceConfig::writePending(const miningembed::PendingTransaction* pending, 
         return false;
     }
     auto& store = *static_cast<DeviceConfig*>(context);
-    if (!store.enrolled() || !store.config_.enabled ||
-        !store.persist(store.config_, pending, true)) {
+    if (!store.enrolled() || !store.config_.enabled || store.restart_) {
         return false;
     }
-    if (pending != &store.pending_) {
-        clearString(store.pending_.raw);
-        store.pending_ = pending ? *pending : miningembed::PendingTransaction{};
+    const auto* current = store.hasPending_ ? &store.pending_ : nullptr;
+    if (samePending(pending, current)) {
+        return true;
     }
+    if ((pending && current) || !store.persistJournal(pending)) {
+        return false;
+    }
+    clearString(store.pending_.raw);
+    store.pending_ = pending ? *pending : miningembed::PendingTransaction{};
     store.hasPending_ = pending != nullptr;
     return true;
 }
@@ -588,7 +724,9 @@ bool DeviceConfig::enroll(const std::string& token) {
         return false;
     }
     Config next;
-    bool ok = tokenVerifier(token, next.operatorVerifier) && persist(next, nullptr);
+    const bool ok = tokenVerifier(token, next.operatorVerifier) &&
+                    initializeJournal(nullptr) &&
+                    persist(next, journalFloor_);
     clearConfig(next);
     if (ok) {
         restart_ = true;
@@ -596,13 +734,24 @@ bool DeviceConfig::enroll(const std::string& token) {
     return ok;
 }
 
+bool DeviceConfig::recoverOperator(const uint8_t verifier[32]) {
+    if (!enrolled() || !any(verifier, 32)) {
+        return false;
+    }
+    Config next = config_;
+    memcpy(next.operatorVerifier, verifier, 32);
+    const bool ok = commit(next);
+    clearConfig(next);
+    return ok;
+}
+
 bool DeviceConfig::factoryReset(const std::string& evidence) {
     if (!enrolled() || evidence != (hasPending_ ? pending_.hash : "NONE")) {
         return false;
     }
-    // A fresh tombstone dominates both older slots; never erase the old slot first.
+    // One config commit retires the reconciled journal up to its current generation.
     Config blank;
-    if (!persist(blank, nullptr)) {
+    if (!persist(blank, journalGeneration_)) {
         return false;
     }
     restart_ = true;

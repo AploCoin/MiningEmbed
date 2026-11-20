@@ -99,9 +99,14 @@ WorkResult search(
     Candidate& out,
     HashFunction hash,
     RandomFunction random,
-    YieldFunction cooperate
+    YieldFunction cooperate,
+    SearchCursor* retained,
+    uint32_t* hashesTested
 ) {
     out = Candidate();
+    if (hashesTested) {
+        *hashesTested = 0;
+    }
     if (!params.valid || !hash || !random || !cooperate) {
         return WorkResult::InvalidArgument;
     }
@@ -115,15 +120,36 @@ WorkResult search(
     uint8_t digest[32];
     packChallenge(params, packed);
     uint8_t* nonce = packed + 20;
+    SearchCursor local;
+    SearchCursor& cursor = retained ? *retained : local;
+    if (!sameChallenge(cursor.params, params)) {
+        cursor.initialized = false;
+        cursor.params = params;
+    }
     for (uint32_t attempt = 0; attempt < attempts; ++attempt) {
         if ((attempt & 63U) == 0) {
             cooperate();
         }
-        if (!random(nonce, 32)) {
-            return WorkResult::RandomUnavailable;
+        if (!cursor.initialized) {
+            if (!random(cursor.nonce, 32)) {
+                return WorkResult::RandomUnavailable;
+            }
+            cursor.initialized = true;
         }
-
+        memcpy(nonce, cursor.nonce, 32);
         hash(packed, sizeof(packed), digest);
+        if (hashesTested) {
+            ++*hashesTested;
+        }
+        // Advance even when a proof is found; the next batch never repeats it.
+        for (size_t index = 32; index > 0; --index) {
+            if (++cursor.nonce[index - 1] != 0) {
+                break;
+            }
+            if (index == 1) {
+                cursor.initialized = false;
+            }
+        }
         if (memcmp(digest, params.target, 32) < 0) {
             out.params = params;
             memcpy(out.nonce, nonce, 32);

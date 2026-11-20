@@ -87,13 +87,22 @@ public:
     MiningEmbed(const MiningEmbed&) = delete;
     MiningEmbed& operator=(const MiningEmbed&) = delete;
     // Poll the outstanding share or run one bounded read/search/submit cycle.
+    // nowMs is a monotonic uint32_t clock; millis rollover is supported.
     Status step(uint32_t maxAttempts, Submission& out);
+    Status step(uint32_t maxAttempts, Submission& out, uint32_t nowMs);
+    // Actual search hashes in the latest step/findCandidate, excluding RPC and
+    // validation hashes. Clock durations use wrap-safe uint32_t subtraction.
+    uint32_t hashesTested() const { return hashesTested_; }
+    uint32_t searchMicros() const { return searchMicros_; }
     Status readParams(MinerParams& out);
     Status findCandidate(const MinerParams& params, uint32_t maxAttempts, Candidate& out);
     Status revalidate(const Candidate& candidate);
     Status submit(const Candidate& candidate, Submission& out);
     // Poll once; caller controls timing. RPC failure retains unresolved state/hash.
+    // If the nonce lane is empty, retry identical journaled bytes no more than
+    // once per 30 seconds, after fresh authorization/proof/funding checks.
     Status receipt(Submission& out);
+    Status receipt(Submission& out, uint32_t nowMs);
     // Restore before step(). False leaves a fail-closed lock; operator must reconcile.
     bool restore(const PendingTransaction& pending);
 
@@ -116,8 +125,8 @@ private:
     );
     Status authorizeTransaction(const Candidate& candidate, aplo::NativeTransaction& transaction);
     Status broadcast(const aplo::NativeTransaction& transaction, Submission& out);
-    Status sendPending(Submission& out);
-    Status recover(Submission& out);
+    Status sendPending(Submission& out, uint32_t nowMs);
+    Status recover(Submission& out, uint32_t nowMs);
     bool decodePending(const PendingTransaction& pending, aplo::NativeTransaction& tx);
     Status readWork(MinerParams& out, uint64_t block);
     bool configurationValid() const;
@@ -141,7 +150,16 @@ private:
     bool locked_ = false;
     bool journalReady_ = true;
     bool recordValid_ = true;
-    bool retryAfterRestore_ = false;
+    bool retryImmediately_ = false;
+    bool retryClockStarted_ = false;
+    uint32_t lastRetryMs_ = 0;
+    uint32_t nowMs_ = 0, stepStartedMs_ = 0;
+    bool callerClock_ = false;
+    MinerParams cachedWork_;
+    SearchCursor searchCursor_;
+    uint32_t workFetchedMs_ = 0;
+    uint32_t hashesTested_ = 0;
+    uint32_t searchMicros_ = 0;
 };
 } // namespace miningembed
 #endif

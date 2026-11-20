@@ -11,6 +11,8 @@ constexpr uint64_t cooldownBlocks = 20;
 constexpr uint64_t minimumGas = 21000;
 constexpr uint64_t gasCeiling = 200000;
 constexpr uint64_t gasHeadroom = 10000;
+constexpr uint32_t retryIntervalMs = 30000;
+constexpr uint32_t workFreshnessMs = 1000;
 
 static string lower(string value) {
     for (char& character : value) {
@@ -176,20 +178,43 @@ MiningEmbed::MiningEmbed(
 }
 
 Status MiningEmbed::step(uint32_t maxAttempts, Submission& out) {
+    return step(maxAttempts, out, detail::milliseconds());
+}
+
+Status MiningEmbed::step(uint32_t maxAttempts, Submission& out, uint32_t nowMs) {
+    const uint32_t started = detail::milliseconds();
+    hashesTested_ = 0;
+    searchMicros_ = 0;
     if (unresolved()) {
-        return receipt(out);
+        return receipt(out, nowMs);
     }
-
     out = Submission();
-    MinerParams params;
-    const Status fetched = readParams(params);
-    if (fetched != Status::Ok) {
-        return fetched;
+    if (maxAttempts == 0 || maxAttempts > 2000 || !configurationValid()) {
+        return Status::InvalidArgument;
     }
-
+    // Cached work is only a search hint. submit() always performs fresh chain,
+    // scope, expiry, nonce, challenge and funding checks before signing.
+    if (!cachedWork_.valid || uint32_t(nowMs - workFetchedMs_) >= workFreshnessMs) {
+        cachedWork_.valid = false;
+        const Status fetched = readParams(cachedWork_);
+        if (fetched != Status::Ok) {
+            cachedWork_.valid = false;
+            return fetched;
+        }
+        workFetchedMs_ = nowMs + uint32_t(detail::milliseconds() - started);
+    }
     Candidate candidate;
-    const Status found = findCandidate(params, maxAttempts, candidate);
-    return found == Status::Ok ? submit(candidate, out) : found;
+    const Status found = findCandidate(cachedWork_, maxAttempts, candidate);
+    if (found != Status::Ok) {
+        return found;
+    }
+    cachedWork_.valid = false;
+    nowMs_ = nowMs;
+    stepStartedMs_ = started;
+    callerClock_ = true;
+    const Status submitted = submit(candidate, out);
+    callerClock_ = false;
+    return submitted;
 }
 
 bool MiningEmbed::configurationValid() const {
@@ -206,8 +231,8 @@ bool MiningEmbed::configurationValid() const {
         return false;
     }
 
-    // The borrowed key can be cleared/replaced between calls; never cache its identity here.
-    return key_.Address() == session_.signer;
+    // The borrowed key can be cleared or replaced between calls.
+    return key_.MatchesAddress(session_.signer);
 }
 
 bool MiningEmbed::checked(const aplo::SessionResult& result) {
@@ -366,6 +391,8 @@ Status MiningEmbed::readParams(MinerParams& out) {
 }
 
 Status MiningEmbed::findCandidate(const MinerParams& params, uint32_t attempts, Candidate& out) {
+    hashesTested_ = 0;
+    searchMicros_ = 0;
     out = Candidate();
     if (unresolved()) {
         return Status::Busy;
@@ -377,7 +404,13 @@ Status MiningEmbed::findCandidate(const MinerParams& params, uint32_t attempts, 
         return Status::InvalidArgument;
     }
 
-    switch (search(params, attempts, out, detail::hash, detail::random, detail::cooperate)) {
+    const uint32_t started = detail::microseconds();
+    const WorkResult result = search(
+        params, attempts, out, detail::hash, detail::random, detail::cooperate,
+        &searchCursor_, &hashesTested_
+    );
+    searchMicros_ = uint32_t(detail::microseconds() - started);
+    switch (result) {
     case WorkResult::Found:
         return Status::Ok;
     case WorkResult::Exhausted:
@@ -573,14 +606,18 @@ Status MiningEmbed::broadcast(const aplo::NativeTransaction& transaction, Submis
     if (!journalReady_) {
         return Status::JournalFailed;
     }
-    return sendPending(out);
+    const uint32_t now = detail::milliseconds();
+    return sendPending(out, callerClock_ ? nowMs_ + uint32_t(now - stepStartedMs_) : now);
 }
 
-Status MiningEmbed::sendPending(Submission& out) {
-    // One send per new transaction or valid reboot recovery; never per normal poll.
-    retryAfterRestore_ = false;
+Status MiningEmbed::sendPending(Submission& out, uint32_t nowMs) {
+    // Every network attempt has the same durable bytes and a bounded cadence.
+    retryImmediately_ = false;
+    retryClockStarted_ = true;
+    lastRetryMs_ = nowMs;
     string accepted;
     if (!checked(rpc_.SendRaw(pending_.raw, accepted)) || lower(accepted) != pending_.hash) {
+        outstanding_.state = SubmissionState::Uncertain;
         out = outstanding_;
         return Status::BroadcastUncertain;
     }
@@ -622,6 +659,11 @@ Status MiningEmbed::submit(const Candidate& candidate, Submission& out) {
 }
 
 Status MiningEmbed::receipt(Submission& out) {
+    return receipt(out, detail::milliseconds());
+}
+
+Status MiningEmbed::receipt(Submission& out, uint32_t nowMs) {
+    const uint32_t started = detail::milliseconds();
     if (!unresolved()) {
         out = Submission();
         return Status::InvalidArgument;
@@ -653,7 +695,9 @@ Status MiningEmbed::receipt(Submission& out) {
         pending_ = PendingTransaction();
         outstanding_ = Submission();
         locked_ = false;
-        retryAfterRestore_ = false;
+        retryImmediately_ = false;
+        retryClockStarted_ = false;
+        cachedWork_.valid = false;
         journalReady_ = true;
         return Status::Ok;
     }
@@ -665,11 +709,40 @@ Status MiningEmbed::receipt(Submission& out) {
     }
     out = outstanding_;
     // A null receipt is not proof of absence, acceptance, failure, or success.
-    return recover(out);
+    return recover(out, nowMs + uint32_t(detail::milliseconds() - started));
 }
 
 namespace {
-// Bounded RLP reader. Canonical encoding and signature are checked by exact re-sign below.
+// Bounded RLP reader. Canonical encoding and signature are checked by exact
+// reconstruction using the stored signature, without accessing the secret key.
+bool storedSignature(const uint8_t*, uint8_t* signature, void* context) {
+    memcpy(signature, context, 65);
+    return true;
+}
+
+bool recoveryId(const uint256_t& chain, const uint8_t* encoded, size_t size, uint8_t& id) {
+    const auto bytes = chain.export_bits();
+    for (unsigned recovery = 0; recovery < 2; ++recovery) {
+        uint8_t replay[33] = {};
+        unsigned carry = 35 + recovery;
+        for (size_t index = 32; index > 0; --index) {
+            const unsigned value = unsigned(bytes[index - 1]) * 2 + carry;
+            replay[index] = static_cast<uint8_t>(value);
+            carry = value >> 8;
+        }
+        replay[0] = static_cast<uint8_t>(carry);
+        size_t start = 0;
+        while (start < 32 && replay[start] == 0) {
+            ++start;
+        }
+        if (size == 33 - start && memcmp(encoded, replay + start, size) == 0) {
+            id = static_cast<uint8_t>(recovery);
+            return true;
+        }
+    }
+    return false;
+}
+
 bool rlpItem(
     const uint8_t*& cursor,
     const uint8_t* end,
@@ -737,6 +810,7 @@ bool MiningEmbed::decodePending(const PendingTransaction& pending, aplo::NativeT
     end = data + size;
     tx = aplo::NativeTransaction();
     tx.chainId = session_.chainId;
+    uint8_t signature[65] = {};
     for (unsigned field = 0; field < 9; ++field) {
         if (!rlpItem(cursor, end, data, size, list) || list) {
             return false;
@@ -773,8 +847,15 @@ bool MiningEmbed::decodePending(const PendingTransaction& pending, aplo::NativeT
                 return false;
             }
             tx.data = hexBytes(data, size);
-        } else if (size == 0 || size > (field == 6 ? 33u : 32u)) {
-            return false;
+        } else if (field == 6) {
+            if (!recoveryId(tx.chainId, data, size, signature[64])) {
+                return false;
+            }
+        } else {
+            if (size == 0 || size > 32) {
+                return false;
+            }
+            memcpy(signature + (field == 7 ? 0 : 32) + 32 - size, data, size);
         }
     }
     const uint256_t maximum = ~uint256_t(0);
@@ -789,8 +870,8 @@ bool MiningEmbed::decodePending(const PendingTransaction& pending, aplo::NativeT
     return checked(
                aplo::SessionKeys::SignTransaction(
                    tx,
-                   aplo::SessionKey::SignDigest,
-                   &key_,
+                   storedSignature,
+                   signature,
                    session_.signer,
                    signedRaw
                )
@@ -815,11 +896,12 @@ bool MiningEmbed::restore(const PendingTransaction& pending) {
     pending_.raw = lower(pending_.raw);
     pending_.hash = lower(pending_.hash);
     outstanding_.hash = pending_.hash;
-    retryAfterRestore_ = true;
+    retryImmediately_ = true;
     return true;
 }
 
-Status MiningEmbed::recover(Submission& out) {
+Status MiningEmbed::recover(Submission& out, uint32_t nowMs) {
+    const uint32_t started = detail::milliseconds();
     uint64_t latest, pending;
     if (!checked(rpc_.LatestNonce(session_.signer, latest)) ||
         !checked(rpc_.PendingNonce(session_.signer, pending))) {
@@ -829,9 +911,18 @@ Status MiningEmbed::recover(Submission& out) {
     if (latest != pending_.nonce || pending < latest) {
         return Status::RecoveryRequired;
     }
-    if (!retryAfterRestore_ || pending != latest) {
+    if (pending != latest) {
         return Status::Ok;
     }
+    if (!retryImmediately_ && retryClockStarted_ &&
+        uint32_t(nowMs - lastRetryMs_) < retryIntervalMs) {
+        return Status::Ok;
+    }
+    // Bound failed preflight attempts too: a revoked/expired/underfunded pending
+    // transaction must not cause an expensive recovery loop on every poll.
+    retryImmediately_ = false;
+    retryClockStarted_ = true;
+    lastRetryMs_ = nowMs;
 
     aplo::NativeTransaction tx;
     if (!decodePending(pending_, tx)) {
@@ -879,6 +970,6 @@ Status MiningEmbed::recover(Submission& out) {
     if (tx.nonce != originalNonce) {
         return Status::RecoveryRequired;
     }
-    return sendPending(out);
+    return sendPending(out, nowMs + uint32_t(detail::milliseconds() - started));
 }
 } // namespace miningembed

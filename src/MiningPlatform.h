@@ -10,6 +10,8 @@ std::string encodeCall(const char* signature, const std::string* argument);
 void hash(const uint8_t* data, size_t length, uint8_t* output);
 bool random(uint8_t* data, size_t length);
 void cooperate();
+uint32_t milliseconds();
+uint32_t microseconds();
 } // namespace detail
 } // namespace miningembed
 #endif

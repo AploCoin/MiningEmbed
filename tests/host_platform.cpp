@@ -47,6 +47,8 @@ bool random(uint8_t* bytes, size_t length) {
 }
 
 void cooperate() {}
+uint32_t milliseconds() { return 0; }
+uint32_t microseconds() { return 0; }
 } // namespace detail
 } // namespace miningembed
 

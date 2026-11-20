@@ -6,6 +6,8 @@
 using namespace miningembed;
 static unsigned yields = 0;
 static unsigned randomCalls = 0;
+static uint8_t observed[8][32];
+static unsigned observations = 0;
 static void cooperate() {
     ++yields;
 }
@@ -21,6 +23,11 @@ static void zeroHash(const uint8_t*, size_t, uint8_t* digest) {
     memset(digest, 0, 32);
 }
 static void maxHash(const uint8_t*, size_t, uint8_t* digest) {
+    memset(digest, 255, 32);
+}
+static void observeHash(const uint8_t* packed, size_t length, uint8_t* digest) {
+    assert(length == 148 && observations < 8);
+    memcpy(observed[observations++], packed + 20, 32);
     memset(digest, 255, 32);
 }
 
@@ -84,7 +91,31 @@ int main() {
     yields = 0;
     randomCalls = 0;
     assert(search(params, 2000, out, maxHash, randomNonce, cooperate) == WorkResult::Exhausted);
-    assert(!out.valid && randomCalls == 2000 && yields == 33);
+    assert(!out.valid && randomCalls == 1 && yields == 33);
+    SearchCursor cursor;
+    uint32_t tested = 999;
+    randomCalls = observations = 0;
+    assert(search(params, 2, out, observeHash, randomNonce, cooperate, &cursor, &tested) ==
+           WorkResult::Exhausted);
+    assert(tested == 2 && randomCalls == 1);
+    assert(search(params, 2, out, observeHash, randomNonce, cooperate, &cursor, &tested) ==
+           WorkResult::Exhausted);
+    assert(tested == 2 && randomCalls == 1 && observations == 4);
+    for (unsigned i = 0; i < 4; ++i) {
+        assert(memcmp(observed[i], nonce, 31) == 0 && observed[i][31] == 0x22 + i);
+    }
+    MinerParams changed = params;
+    changed.prevHash[0] ^= 1;
+    assert(search(changed, 1, out, observeHash, randomNonce, cooperate, &cursor, &tested) ==
+           WorkResult::Exhausted);
+    assert(tested == 1 && randomCalls == 2 && memcmp(observed[4], nonce, 32) == 0);
+    assert(search(params, 2, out, zeroHash, randomNonce, cooperate, &cursor, &tested) ==
+           WorkResult::Found);
+    assert(tested == 1 && out.valid);
+    cursor.initialized = false;
+    assert(search(params, 2, out, zeroHash, failedRandom, cooperate, &cursor, &tested) ==
+           WorkResult::RandomUnavailable);
+    assert(tested == 0 && !out.valid);
     assert(search(params, 1, out, zeroHash, failedRandom, cooperate) ==
            WorkResult::RandomUnavailable);
     assert(!out.valid);

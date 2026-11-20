@@ -22,5 +22,7 @@ bool random(uint8_t* data, size_t length) {
 void cooperate() {
     delay(0);
 }
+uint32_t milliseconds() { return millis(); }
+uint32_t microseconds() { return micros(); }
 } // namespace detail
 } // namespace miningembed

@@ -35,9 +35,13 @@ private:
     void setTrust(const Config& config);
     bool startMiner(const Config& config);
     void pauseTrust(bool pause);
+    void measure(uint32_t now);
+    void runStep(uint32_t now);
+    static void serveRpcIdle(void* context);
     const char* runDevice();
 
     DeviceConfig store_;
+    RuntimeSnapshot snapshot_;
     SerialConfig serial_;
     StartNetwork startNetwork_;
     PollNetwork pollNetwork_;
@@ -49,7 +53,9 @@ private:
     const char* lastMiningState_ = "mining";
     bool trustPaused_ = false;
     bool miningBlocked_ = false;
-    uint32_t lastStepAt_ = 0;
+    Stream* port_ = nullptr;
+    uint32_t lastStepAt_ = 0, nextStepDelay_ = 0, lastSampleAt_ = 0;
+    uint64_t lastSampleHashes_ = 0;
 };
 
 } // namespace provisioning

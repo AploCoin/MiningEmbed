@@ -1096,7 +1096,98 @@ static void testDirectFullDomain() {
     );
 }
 
+static void testRuntimeRetry() {
+    for (bool direct : {false, true}) {
+        for (unsigned response = 0; response < 3; ++response) {
+            Test test;
+            Journal journal;
+            auto miner = makeMiner(test, journal, direct);
+            test.fixture.failSend = response == 1;
+            test.fixture.badHash = response == 2;
+            Submission submission;
+            const uint32_t start = UINT32_MAX - 1000; // cadence survives millis wrap
+            assert(miner->step(2000, submission, start) ==
+                   (response ? Status::BroadcastUncertain : Status::Ok));
+            assert(miner->hashesTested() == 1 && journal.writes == 1);
+            const string originalRaw = journal.saved.raw;
+            const string originalHash = journal.saved.hash;
+            assert(miner->step(2000, submission, start + 29999U) == Status::Ok);
+            assert(miner->hashesTested() == 0 && test.fixture.sends == 1);
+            test.fixture.events.clear();
+            test.fixture.failSend = test.fixture.badHash = false;
+            assert(miner->step(2000, submission, start + 30000U) == Status::Ok);
+            assert(test.fixture.events[0] == 'R' && test.fixture.sends == 2);
+            assert(submission.state == SubmissionState::Broadcast);
+            assert(submission.hash == originalHash && test.fixture.lastRaw == originalRaw);
+            assert(journal.writes == 1 && journal.clears == 0);
+            assert(miner->step(1, submission, start + 30001U) == Status::Ok);
+            assert(test.fixture.sends == 2 && submission.state == SubmissionState::Pending);
+            assert(miner->step(1, submission, start + 60000U) == Status::Ok);
+            assert(test.fixture.sends == 3 && test.fixture.lastRaw == originalRaw);
+            test.fixture.receipt = 1;
+            assert(miner->step(1, submission, start + 90000U) == Status::Ok);
+            assert(submission.state == SubmissionState::Confirmed && !miner->unresolved());
+            assert(test.fixture.sends == 3 && journal.clears == 1);
+        }
+    }
+}
+
+static void testRuntimeRetryGuards() {
+    for (bool direct : {false, true}) {
+        for (unsigned fault = 0; fault < 10; ++fault) {
+            Test test;
+            Journal journal;
+            auto miner = makeMiner(test, journal, direct);
+            Submission submission;
+            assert(miner->step(1, submission, 0) == Status::Ok);
+            switch (fault) {
+            case 0: ++test.fixture.pending; break;
+            case 1: ++test.fixture.latest; ++test.fixture.pending; break;
+            case 2: ++test.fixture.chain; break;
+            case 3: test.fixture.active = direct; break;
+            case 4: test.fixture.receiptError = true; break;
+            case 5: test.fixture.ownerBalance = 0; break;
+            case 6: test.fixture.stale = true; test.fixture.proofTarget = 1; break;
+            case 7: test.fixture.advanceAtEstimate = true; break;
+            case 8: test.fixture.gasPrice = 2; break;
+            case 9:
+                if (direct) {
+                    test.fixture.stake = 0;
+                } else {
+                    test.fixture.head = test.fixture.expiry;
+                }
+                break;
+            }
+            miner->step(1, submission, 30000);
+            assert(miner->unresolved() && test.fixture.sends == 1);
+            assert(journal.occupied && journal.writes == 1 && journal.clears == 0);
+            const unsigned estimates = test.fixture.estimates;
+            miner->step(1, submission, 30001);
+            assert(test.fixture.sends == 1 && test.fixture.estimates == estimates);
+        }
+    }
+}
+
+static void testWorkCacheAndAccounting() {
+    Test test;
+    test.fixture.proofTarget = 1;
+    MiningEmbed miner(test.rpc, test.key, test.session);
+    Submission submission;
+    assert(miner.step(2000, submission, 0) == Status::NoCandidate);
+    assert(miner.hashesTested() == 2000 && test.fixture.reads == 1);
+    assert(miner.step(123, submission, 999) == Status::NoCandidate);
+    assert(miner.hashesTested() == 123 && test.fixture.reads == 1);
+    test.fixture.head = test.fixture.expiry;
+    assert(miner.step(123, submission, 1000) == Status::Expired);
+    assert(miner.hashesTested() == 0 && test.fixture.reads == 2 && test.fixture.sends == 0);
+    assert(miner.step(0, submission, 1001) == Status::InvalidArgument);
+    assert(miner.hashesTested() == 0);
+}
+
 int main() {
+    testWorkCacheAndAccounting();
+    testRuntimeRetry();
+    testRuntimeRetryGuards();
     testTerminalReboot();
     testDirectFullDomain();
     testDirect();
@@ -1114,6 +1205,7 @@ int main() {
     testInvalidProof();
     puts(
         "facade: owner/session identity, domain, nonce, policy/funding/revocation, "
-        "proof, direct EIP155, durable journal, reboot recovery and receipt states passed"
+        "proof, direct EIP155, durable journal, runtime/reboot retry, work cache, "
+        "actual hash counts and receipt states passed"
     );
 }

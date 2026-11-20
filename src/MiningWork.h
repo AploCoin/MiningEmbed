@@ -26,6 +26,14 @@ using HashFunction = void (*)(const uint8_t*, size_t, uint8_t*);
 using RandomFunction = bool (*)(uint8_t*, size_t);
 using YieldFunction = void (*)();
 
+// A random starting point followed by a big-endian counter. Retain across bounded
+// batches to avoid repeated entropy calls or hashing the same nonce twice.
+struct SearchCursor {
+    MinerParams params;
+    uint8_t nonce[32] = {};
+    bool initialized = false;
+};
+
 // Big-endian ABI words. Buffer capacities are checked before any write.
 bool decodeHex(const char* hex, uint8_t* output, size_t capacity, size_t bytes);
 bool sameChallenge(const MinerParams& a, const MinerParams& b);
@@ -43,14 +51,16 @@ bool validProof(
     size_t nonceSize,
     HashFunction hash
 );
-// At most 2,000 nonces; caller re-reads params between batches. No heap allocation.
+// At most 2,000 nonces; caller bounds challenge freshness. No heap allocation.
 WorkResult search(
     const MinerParams& params,
     uint32_t attempts,
     Candidate& out,
     HashFunction hash,
     RandomFunction random,
-    YieldFunction cooperate
+    YieldFunction cooperate,
+    SearchCursor* cursor = nullptr,
+    uint32_t* hashesTested = nullptr
 );
 } // namespace miningembed
 #endif
